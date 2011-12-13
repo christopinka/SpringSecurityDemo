@@ -1,0 +1,79 @@
+def environmentSettings = "http://resolver/gradle-scripts/weblogic/environments.groovy"
+// extract these to properties
+
+def z = new Properties()
+file("application.properties").withInputStream { InputStream input ->
+	z.load(input)
+}
+version = z.get("app.version")
+targets = [local:'carfax', others:'carfax']
+warName = "${project.name}-${version}.war"
+
+repositories {
+	 mavenRepo urls: "http://resolver/all"
+}
+
+task buildWar <<  {
+	file('target').deleteDir()
+
+	ant.exec(executable:"${System.getenv()['GRAILS_HOME']}\\bin\\grails.bat"){
+		arg(value:"clean")
+	}
+	ant.exec(executable:"${System.getenv()['GRAILS_HOME']}\\bin\\grails.bat", failonerror:true){
+		arg(value:"war target\\${warName}")
+	}
+}
+
+configurations{
+	weblogic
+}
+
+dependencies {
+	weblogic 'weblogic:weblogic:9.2'
+	weblogic 'com.rsa.jsafe:jsafe:3.5'
+}
+ant{
+	taskdef(name:'wldeploy',
+		classname:'weblogic.ant.taskdefs.management.WLDeploy',
+		classpath:configurations.weblogic.asPath)
+}
+
+// -- WEBLOGIC DEPLOYMENTS
+['local', 'dev', 'alpha', 'beta', 'prod'].each { targetEnv ->
+	def taskname = "${targetEnv}WeblogicDeploy"
+	task "${taskname}"(dependsOn:'buildWar') << {
+		def config = new ConfigSlurper(targetEnv).parse(environmentSettings.toURL());
+		def war =  "target/${warName}"
+		def target = targetEnv=='local'?targets.local:targets.others
+
+		config.adminurl.each { adminurl ->
+			if(config.requiresUserkey){
+				ant.wldeploy(action:'deploy',
+					source:"$war",
+					name:"${project.name}",
+					adminurl:adminurl,
+					userkeyfile:config.userkey,
+					userconfigfile:config.userconfigfile,
+					upload:"true",
+					targets:"$target",
+					verbose:'true',
+					debug:'false',
+					appversion:version)
+			} else {
+				ant.wldeploy(action:'deploy',
+					source:"$war",
+					name:"${project.name}",
+					adminurl:adminurl,
+					user:config.username,
+					password:config.password,
+					upload:"true",
+					targets:"$target",
+					verbose:'true',
+					debug:'false',
+					appversion:version)
+			}
+		}
+	}
+
+	tasks["${taskname}"].group = "Weblogic Deployment"
+}
